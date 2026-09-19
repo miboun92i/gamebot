@@ -22,8 +22,9 @@ TEST_CHAT_ID=int(os.getenv("TEST_CHAT_ID","0"))
 dp=Dispatcher()
 pool=None
 active_games={}
+recent_anagrams={}
 
-WORDS=["silence","telegram","mystere","cascade","planete","orange","pirate","musique","voyage","rapide","secret","chance","dragon","cinema","jungle","mirage","puzzle","soleil"]
+WORDS=["abricot","adresse","aiguille","alarme","amande","animal","appareil","argent","armoire","aventure","banane","bateau","biscuit","bouteille","bureau","cabane","cadeau","cahier","camion","cascade","cerise","chance","chapeau","chocolat","cinema","citron","clavier","cloche","coffre","colline","couleur","courage","cuisine","danseur","diamant","dragon","eclair","ecole","ecran","etoile","famille","fenetre","festival","foret","fromage","garage","gateau","guitare","histoire","horloge","jardin","journal","jungle","lampe","livre","magie","maison","marche","melodie","message","mirage","montagne","moteur","musique","mystere","nature","nuage","ocean","orange","parfum","parole","passage","peinture","pirate","planete","plume","puzzle","rapide","rivage","robot","secret","silence","soleil","sourire","tableau","telegram","tempete","tigre","tomate","train","tresor","valise","village","visage","voyage","astronaute","bibliotheque","extraordinaire","magnifique","parapluie","restaurant","telephone","tourbillon"]
 COPY=["incroyable","parapluie","astronaute","magnifique","cacahuete","tourbillon","telegram"]
 FLAGS={"🇫🇷":"France","🇵🇹":"Portugal","🇪🇸":"Espagne","🇮🇹":"Italie","🇩🇪":"Allemagne","🇧🇪":"Belgique","🇦🇱":"Albanie","🇲🇦":"Maroc","🇨🇦":"Canada","🇯🇵":"Japon","🇧🇷":"Brésil","🇬🇷":"Grèce"}
 
@@ -182,24 +183,77 @@ async def task_event(chat_id,u,event,unique_key=None,amount=1,chat_title=None):
         if bonus:
             await add_xp(chat_id,u,DAILY_BONUS,"tasks:5of5",chat_title)
 
-def new_game():
-    kind=random.choice(["anagram","copy","math"])
-    if kind=="anagram":
-        ans=random.choice(WORDS); chars=list(ans)
-        while "".join(chars)==ans: random.shuffle(chars)
-        return kind,"🧩 ANAGRAMME\n\nRemets les lettres dans le bon ordre :\n\n🔥  "+"".join(chars).upper(),ans
-    if kind=="copy":
-        ans=random.choice(COPY)
-        return kind,"⚡ RAPIDITÉ\n\nRecopie exactement ce mot :\n\n🔥  "+ans.upper(),ans
-    a=random.randint(4,25); b=random.randint(2,12); op=random.choice(["+","-","×"])
-    ans=a+b if op=="+" else a-b if op=="-" else a*b
-    return kind,f"🧠 CALCUL MENTAL\n\nCombien font :\n\n🔥  {a} {op} {b} ?",str(ans)
+def pick_anagram(chat_id):
+    recent=recent_anagrams.setdefault(chat_id,[])
+    candidates=[w for w in WORDS if w not in recent] or WORDS
+    word=random.choice(candidates)
+    recent.append(word)
+    if len(recent)>30: del recent[:-30]
+    chars=list(word)
+    while "".join(chars)==word: random.shuffle(chars)
+    difficulty="FACILE" if len(word)<=6 else "MOYEN" if len(word)<=9 else "DIFFICILE"
+    return word,"".join(chars),difficulty
+
+def flag_keyboard(options):
+    return InlineKeyboardMarkup(inline_keyboard=[
+      [InlineKeyboardButton(text=options[i],callback_data="flag:"+norm(options[i])),
+       InlineKeyboardButton(text=options[i+1],callback_data="flag:"+norm(options[i+1]))]
+      for i in range(0,8,2)
+    ])
 
 async def start_game(bot,chat_id):
     if chat_id in active_games: return
-    _,text,ans=new_game()
-    msg=await bot.send_message(chat_id,text+"\n\n🏆 Premier à répondre correctement : +250 XP")
-    active_games[chat_id]={"answer":norm(ans),"started":datetime.now(timezone.utc),"message_id":msg.message_id}
+    await pool.execute("INSERT INTO group_settings(chat_id) VALUES($1) ON CONFLICT DO NOTHING",chat_id)
+    cfg=await pool.fetchrow("SELECT * FROM group_settings WHERE chat_id=$1",chat_id)
+    if not cfg["games_enabled"]: return
+    kinds=[]
+    if cfg["game_anagram"]: kinds.append("anagram")
+    if cfg["game_copy"]: kinds.append("copy")
+    if cfg["game_math"]: kinds.append("math")
+    if cfg["game_flag"]: kinds.append("flag")
+    if not kinds: return
+    kind=random.choice(kinds)
+    markup=None
+    if kind=="anagram":
+        ans,scrambled,difficulty=pick_anagram(chat_id)
+        text=f"🧩 ANAGRAMME · {difficulty}\n\nRemets les lettres dans le bon ordre :\n\n🔥  {scrambled.upper()}"
+    elif kind=="copy":
+        ans=random.choice(COPY); text="⚡ RAPIDITÉ\n\nRecopie exactement ce mot :\n\n🔥  "+ans.upper()
+    elif kind=="math":
+        x=random.randint(4,25); y=random.randint(2,12); op=random.choice(["+","-","×"])
+        ans=str(x+y if op=="+" else x-y if op=="-" else x*y); text=f"🧠 CALCUL MENTAL\n\nCombien font :\n\n🔥  {x} {op} {y} ?"
+    else:
+        flag,ans=random.choice(list(FLAGS.items()))
+        wrong=random.sample([v for v in FLAGS.values() if v!=ans],7)
+        options=wrong+[ans]; random.shuffle(options)
+        text=f"🚩 DRAPEAU\n\nQuel pays correspond à ce drapeau ?\n\n{flag}"
+        markup=flag_keyboard(options)
+    msg=await bot.send_message(chat_id,text+"\n\n🏆 Premier à répondre correctement : +250 XP",reply_markup=markup)
+    active_games[chat_id]={"kind":kind,"answer":norm(ans),"started":datetime.now(timezone.utc),"message_id":msg.message_id,"cooldowns":{}}
+
+@dp.callback_query(lambda q: q.data and q.data.startswith("flag:"))
+async def flag_answer(q:CallbackQuery,bot:Bot):
+    if not q.message: return
+    cid=q.message.chat.id; game=active_games.get(cid)
+    if not game or game.get("kind")!="flag" or game.get("message_id")!=q.message.message_id:
+        return await q.answer("Cette manche est terminée.",show_alert=False)
+    now=datetime.now(timezone.utc); until=game["cooldowns"].get(q.from_user.id)
+    if until and until>now:
+        left=max(1,int((until-now).total_seconds()+0.99))
+        return await q.answer(f"Attends {left}s avant de réessayer.",show_alert=True)
+    choice=q.data.split(":",1)[1]
+    if choice!=game["answer"]:
+        game["cooldowns"][q.from_user.id]=now+timedelta(seconds=5)
+        return await q.answer("❌ Mauvaise réponse · attends 5 secondes.",show_alert=True)
+    active_games.pop(cid,None)
+    elapsed=(now-game["started"]).total_seconds()
+    await add_xp(cid,q.from_user,250,"game_win",q.message.chat.title)
+    sid=await current_season_id()
+    await pool.execute("UPDATE users SET wins=wins+1 WHERE chat_id=$1 AND user_id=$2",cid,q.from_user.id)
+    await pool.execute("UPDATE player_season_stats SET wins=wins+1 WHERE chat_id=$1 AND user_id=$2 AND season_id=$3",cid,q.from_user.id,sid)
+    await q.message.edit_reply_markup(reply_markup=None)
+    await q.message.answer(f"🏆 {q.from_user.full_name} remporte la manche en {elapsed:.1f}s !\n+250 XP")
+    await q.answer("Bonne réponse !")
 
 async def close_finished_seasons(bot):
     now=datetime.now(TZ)
