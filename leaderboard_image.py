@@ -1,79 +1,88 @@
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-W,H=1600,800
-BG=(13,13,11); PANEL=(25,24,20); GOLD=(207,169,87); TEXT=(242,240,234); MUTED=(164,160,151)
+W,H=1536,768
+BG=(12,12,10); GOLD=(202,164,82); TEXT=(244,242,237); MUTED=(184,180,170)
 
 def font(size,bold=False):
-    for p in [
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"]:
+    names=["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+           "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"]
+    for p in names:
         try:return ImageFont.truetype(p,size)
         except OSError:pass
     return ImageFont.load_default()
 
-def txt(d,xy,s,size,fill=TEXT,bold=False,anchor=None):
+def t(d,xy,s,size,fill=TEXT,bold=False,anchor=None):
     d.text(xy,str(s),font=font(size,bold),fill=fill,anchor=anchor)
 
-def box(d,xy,fill=PANEL,outline=(100,84,50),radius=18,width=2):
-    d.rounded_rectangle(xy,radius=radius,fill=fill,outline=outline,width=width)
+def box(d,xy,fill=(22,21,18),outline=(107,88,50),r=18,w=2):
+    d.rounded_rectangle(xy,radius=r,fill=fill,outline=outline,width=w)
 
-def avatar(d,cx,cy,r,label):
-    d.ellipse((cx-r,cy-r,cx+r,cy+r),fill=(34,34,32),outline=(201,190,164),width=2)
-    txt(d,(cx,cy),label[:1].upper() if label else "?",r,fill=(215,210,198),bold=True,anchor="mm")
+def paste_avatar(im,d,cx,cy,r,p,outline):
+    raw=p.get("avatar")
+    if raw:
+        try:
+            av=Image.open(BytesIO(raw)).convert("RGB")
+            av=ImageOps.fit(av,(r*2,r*2),method=Image.Resampling.LANCZOS)
+            mask=Image.new("L",(r*2,r*2),0); md=ImageDraw.Draw(mask);md.ellipse((0,0,r*2-1,r*2-1),fill=255)
+            im.paste(av,(cx-r,cy-r),mask)
+            d.ellipse((cx-r,cy-r,cx+r,cy+r),outline=outline,width=3)
+            return
+        except Exception: pass
+    d.ellipse((cx-r,cy-r,cx+r,cy+r),fill=(37,37,34),outline=outline,width=3)
+    t(d,(cx,cy),(p.get("name") or "?")[:1].upper(),max(18,r),fill=(220,216,205),bold=True,anchor="mm")
 
-def render_top(group_title,season_label,players,total_players,top10_xp,days_left):
-    im=Image.new("RGB",(W,H),BG); d=ImageDraw.Draw(im)
-    # soft background glow
-    for n in range(8):
-        d.ellipse((-250+n*250,-420+n*35,500+n*250,330+n*35),outline=(31,29,23),width=2)
-    box(d,(18,18,W-18,H-18),fill=(18,18,15),outline=(118,96,52),radius=25,width=2)
+def remaining_text(seconds):
+    seconds=max(0,int(seconds)); days,rem=divmod(seconds,86400); hours=rem//3600
+    return f"{days} JOURS {hours} HEURES"
 
-    # brand/header
-    box(d,(55,45,155,145),fill=(28,27,22),outline=(99,81,47),radius=16)
-    txt(d,(105,95),"M",52,GOLD,True,"mm")
-    txt(d,(180,50),"CLASSEMENT GROUPE",22,(211,205,190),True)
-    txt(d,(180,78),(group_title or "GROUPE").upper()[:26],42,TEXT,True)
-    txt(d,(180,125),"Top des membres de ce groupe",19,MUTED)
-    txt(d,(1510,50),f"SAISON {season_label}",25,(232,195,113),True,"ra")
-    txt(d,(1510,91),f"Fin dans {days_left} jours",19,MUTED,False,"ra")
+def render_top(group_title,season_number,month_label,players,total_players,top10_xp,remaining_seconds,group_avatar=None):
+    im=Image.new("RGB",(W,H),BG);d=ImageDraw.Draw(im)
+    box(d,(20,14,W-20,H-14),fill=(18,18,15),outline=(125,101,56),r=24,w=2)
 
-    # podium cards: 2, 1, 3
-    cards=[(55,175,535,385,1,(56,30,35),(156,88,106)),(560,145,1040,385,0,(49,44,28),(220,178,74)),(1065,175,1545,385,2,(34,32,45),(137,119,175))]
+    # logo + header
+    logo={"name":"M","avatar":group_avatar}
+    paste_avatar(im,d,110,82,46,logo,(121,98,55))
+    if not group_avatar:t(d,(110,82),"M",48,GOLD,True,"mm")
+    t(d,(180,34),"C L A S S E M E N T   G R O U P E",20,(218,214,203),True)
+    t(d,(180,62),(group_title or "GROUPE").upper()[:24],38,TEXT,True)
+    t(d,(180,108),"Top des membres de ce groupe",19,MUTED)
+    t(d,(1480,34),f"SAISON {season_number}",23,(237,202,126),True,"ra")
+    t(d,(1480,67),month_label.upper(),17,(210,207,199),False,"ra")
+    d.line((1320,91,1480,91),fill=(90,77,51),width=1)
+    t(d,(1480,111),"◷  Fin dans "+remaining_text(remaining_seconds).lower().replace(" jours","j").replace(" heures","h"),17,MUTED,False,"ra")
+
+    # podium
+    cards=[(52,162,522,354,1,(55,27,33),(177,91,111)),(546,124,990,354,0,(48,43,27),(226,181,72)),(1014,162,1484,354,2,(34,32,46),(145,128,185))]
     for x1,y1,x2,y2,idx,fill,accent in cards:
-        box(d,(x1,y1,x2,y2),fill=fill,outline=accent,radius=16,width=2)
-        pos=idx+1
-        cx=(x1+x2)//2
-        d.ellipse((cx-22,y1-18,cx+22,y1+26),fill=accent)
-        txt(d,(cx,y1+4),pos,21,(20,19,16),True,"mm")
+        box(d,(x1,y1,x2,y2),fill=fill,outline=accent,r=15,w=2);cx=(x1+x2)//2
+        d.ellipse((cx-21,y1-18,cx+21,y1+24),fill=accent)
+        t(d,(cx,y1+3),str(idx+1),20,(20,18,15),True,"mm")
         if idx<len(players):
-            p=players[idx]; avatar(d,cx,y1+80,43,p["name"])
-            txt(d,(cx,y1+139),p["name"][:20],23,TEXT,True,"ma")
-            txt(d,(cx,y1+169),p["rank"].upper(),20,accent,True,"ma")
-            txt(d,(cx,y1+198),f'{p["xp"]:,} XP'.replace(","," "),19,(202,198,188),False,"ma")
-        else:
-            txt(d,(cx,y1+115),"—",28,MUTED,True,"mm")
+            p=players[idx];paste_avatar(im,d,cx,y1+75,42,p,accent)
+            t(d,(cx,y1+130),p["name"][:18],21,TEXT,True,"ma")
+            t(d,(cx,y1+157),p["rank"].upper(),18,accent,True,"ma")
+            t(d,(cx,y1+183),f'{p["xp"]:,} XP'.replace(","," "),17,(210,206,197),False,"ma")
+        else:t(d,(cx,y1+115),"—",27,MUTED,True,"mm")
 
-    # rows 4-7
-    y=405
+    # #4-#7
+    y=372
     for idx in range(3,7):
-        box(d,(55,y,1545,y+55),fill=(24,23,19),outline=(91,76,46),radius=12,width=1)
-        txt(d,(80,y+28),f"#{idx+1}",20,(196,191,179),True,"lm")
+        box(d,(52,y,1484,y+53),fill=(23,22,18),outline=(91,75,44),r=11,w=1)
+        t(d,(76,y+27),f"#{idx+1}",19,(203,198,186),True,"lm")
         if idx<len(players):
-            p=players[idx]; avatar(d,185,y+28,21,p["name"])
-            txt(d,(235,y+28),p["name"][:24],21,TEXT,True,"lm")
-            txt(d,(1465,y+28),f'{p["rank"]}  —  {p["xp"]:,} XP'.replace(","," "),18,(199,195,185),False,"rm")
-        else:
-            txt(d,(235,y+28),"—",21,MUTED,False,"lm")
-        y+=62
+            p=players[idx];paste_avatar(im,d,183,y+27,21,p,(170,165,151))
+            t(d,(235,y+27),p["name"][:22],20,TEXT,True,"lm")
+            t(d,(1430,y+27),f'{p["rank"]}  —  {p["xp"]:,} XP'.replace(","," "),18,(211,207,198),False,"rm")
+        else:t(d,(235,y+27),"—",20,MUTED,False,"lm")
+        y+=60
 
     # footer
-    box(d,(55,660,1545,755),fill=(25,24,20),outline=(111,91,52),radius=18,width=2)
-    footer=[("MEMBRES DU GROUPE",str(total_players)),("TOP 10",f'{top10_xp:,} XP'.replace(","," ")),("FIN DE SAISON DANS",f"{days_left} JOURS")]
-    for i,(lab,val) in enumerate(footer):
-        cx=270+i*520
-        if i: d.line((cx-260,678,cx-260,737),fill=(75,69,56),width=1)
-        txt(d,(cx,685),lab,16,MUTED,False,"ma")
-        txt(d,(cx,724),val,26,(232,218,183),True,"ma")
+    box(d,(52,624,1484,730),fill=(25,24,20),outline=(112,91,50),r=17,w=2)
+    data=[("MEMBRES DU GROUPE",str(total_players)),("TOP 10",f'{top10_xp:,} XP'.replace(","," ")),("FIN DE SAISON DANS",remaining_text(remaining_seconds))]
+    centers=[270,768,1265]
+    for i,(lab,val) in enumerate(data):
+        if i:d.line((centers[i]-250,647,centers[i]-250,708),fill=(78,69,51),width=1)
+        t(d,(centers[i],651),lab,15,MUTED,False,"ma");t(d,(centers[i],692),val,24,(236,218,178),True,"ma")
 
     out=BytesIO();im.save(out,"PNG",optimize=True);out.seek(0);return out
