@@ -160,6 +160,57 @@ async def cmd_game(m:Message,bot:Bot):
     if member.status not in ("administrator","creator"): return
     await start_game(bot,m.chat.id)
 
+async def award_badges(chat_id,user_id):
+    sid=await current_season_id()
+    row=await pool.fetchrow("""SELECT COALESCE(sum(wins),0) wins,COALESCE(sum(tasks_completed),0) tasks,
+      count(*) seasons FROM player_season_stats WHERE chat_id=$1 AND user_id=$2""",chat_id,user_id)
+    checks=[("wins_100",row["wins"]>=100),("wins_500",row["wins"]>=500),
+            ("tasks_100",row["tasks"]>=100),("tasks_500",row["tasks"]>=500),
+            ("veteran_3",row["seasons"]>=3),("ancient_6",row["seasons"]>=6),("legend_12",row["seasons"]>=12)]
+    for code,ok in checks:
+        if ok:
+            bid=await pool.fetchval("SELECT id FROM badges WHERE code=$1",code)
+            await pool.execute("""INSERT INTO player_badges(chat_id,user_id,badge_id,season_id)
+              VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING""",chat_id,user_id,bid,sid)
+
+@dp.message(Command("stats"))
+async def stats_cmd(m:Message):
+    if m.chat.type=="private": return await m.answer("Utilise /stats dans un groupe.")
+    sid=await ensure_user(m.chat.id,m.from_user,m.chat.title)
+    await award_badges(m.chat.id,m.from_user.id)
+    cur=await pool.fetchrow("""SELECT xp,wins,tasks_completed,best_streak FROM player_season_stats
+      WHERE chat_id=$1 AND user_id=$2 AND season_id=$3""",m.chat.id,m.from_user.id,sid)
+    pos=await pool.fetchval("""SELECT 1+count(*) FROM player_season_stats
+      WHERE chat_id=$1 AND season_id=$2 AND xp>$3""",m.chat.id,sid,cur["xp"])
+    career=await pool.fetchrow("""SELECT COALESCE(sum(xp),0) lifetime_xp,COALESCE(sum(wins),0) wins,
+      COALESCE(sum(tasks_completed),0) tasks,count(*) seasons,COALESCE(max(xp),0) best_xp
+      FROM player_season_stats WHERE chat_id=$1 AND user_id=$2""",m.chat.id,m.from_user.id)
+    podiums=await pool.fetchval("SELECT count(*) FROM season_results WHERE chat_id=$1 AND user_id=$2 AND position<=3",m.chat.id,m.from_user.id)
+    firsts=await pool.fetchval("SELECT count(*) FROM season_results WHERE chat_id=$1 AND user_id=$2 AND position=1",m.chat.id,m.from_user.id)
+    badges=await pool.fetch("""SELECT b.label FROM player_badges pb JOIN badges b ON b.id=pb.badge_id
+      WHERE pb.chat_id=$1 AND pb.user_id=$2 ORDER BY pb.earned_at DESC LIMIT 3""",m.chat.id,m.from_user.id)
+    badge_text=" · ".join("🏅 "+b["label"] for b in badges) if badges else "Aucun pour le moment"
+    await m.answer(
+      f"📊 STATS — {m.from_user.full_name}\n\n"
+      f"🏅 {rank_for_xp(cur['xp'])} · {cur['xp']} XP · #{pos}\n"
+      f"🎮 {cur['wins']} victoires cette saison\n"
+      f"📋 {cur['tasks_completed']} tâches complétées\n\n"
+      f"🏆 CARRIÈRE\n"
+      f"XP total : {career['lifetime_xp']}\n"
+      f"Saisons jouées : {career['seasons']}\n"
+      f"Podiums : {podiums} · #1 : {firsts}\n"
+      f"Meilleure saison : {career['best_xp']} XP\n\n"
+      f"🎖 {badge_text}")
+
+@dp.message(Command("badges"))
+async def badges_cmd(m:Message):
+    await ensure_user(m.chat.id,m.from_user,m.chat.title)
+    await award_badges(m.chat.id,m.from_user.id)
+    rows=await pool.fetch("""SELECT b.label,b.category,pb.earned_at FROM player_badges pb
+      JOIN badges b ON b.id=pb.badge_id WHERE pb.chat_id=$1 AND pb.user_id=$2 ORDER BY pb.earned_at""",m.chat.id,m.from_user.id)
+    if not rows: return await m.answer("🎖 Tu n’as pas encore de badge dans ce groupe.")
+    await m.answer("🎖 TES BADGES\n\n"+"\n".join(f"• {r['label']} · {r['category']}" for r in rows))
+
 @dp.message(Command("rank"))
 async def rank_cmd(m:Message):
     sid=await ensure_user(m.chat.id,m.from_user,m.chat.title)
