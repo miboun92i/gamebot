@@ -1,85 +1,110 @@
 from io import BytesIO
-from PIL import Image, ImageDraw, ImageFont, ImageOps, ImageFilter
+from pathlib import Path
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-W,H=1536,864
-GOLD=(202,163,81); TEXT=(244,242,237); MUTED=(190,186,178)
+W, H = 1536, 864
+TEXT = (245, 241, 231)
+MUTED = (194, 187, 174)
+GOLD = (226, 187, 103)
+TEMPLATE = Path(__file__).resolve().parent / "assets" / "top_template.png"
 
-def font(n,b=False):
-    paths=["/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if b else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-           "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if b else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf"]
+def font(n, bold=False):
+    paths = [
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+    ]
     for p in paths:
-        try:return ImageFont.truetype(p,n)
-        except OSError:pass
+        try:
+            return ImageFont.truetype(p, n)
+        except OSError:
+            pass
     return ImageFont.load_default()
 
-def tx(d,x,y,s,n,c=TEXT,b=False,a=None): d.text((x,y),str(s),font=font(n,b),fill=c,anchor=a)
-def rr(d,xy,fill,outline=(105,83,45),r=14,w=2): d.rounded_rectangle(xy,radius=r,fill=fill,outline=outline,width=w)
+def text(d, xy, value, size, fill=TEXT, bold=False, anchor=None):
+    d.text(xy, str(value), font=font(size, bold), fill=fill, anchor=anchor)
 
-def av(im,d,cx,cy,r,p,border):
-    raw=p.get("avatar")
+def remaining(sec, compact=False):
+    days, rem = divmod(max(0, int(sec)), 86400)
+    hours = rem // 3600
+    return f"{days}j {hours}h" if compact else f"{days} JOURS {hours} HEURES"
+
+def avatar(im, d, cx, cy, r, player, border):
+    raw = player.get("avatar")
     if raw:
         try:
-            x=Image.open(BytesIO(raw)).convert("RGB");x=ImageOps.fit(x,(r*2,r*2),Image.Resampling.LANCZOS)
-            m=Image.new("L",(r*2,r*2));ImageDraw.Draw(m).ellipse((0,0,r*2-1,r*2-1),fill=255)
-            im.paste(x,(cx-r,cy-r),m);d.ellipse((cx-r,cy-r,cx+r,cy+r),outline=border,width=3);return
-        except Exception: pass
-    d.ellipse((cx-r,cy-r,cx+r,cy+r),fill=(35,35,33),outline=border,width=3)
-    tx(d,cx,cy,(p.get("name") or "?")[:1].upper(),r,(220,216,205),True,"mm")
+            src = Image.open(BytesIO(raw)).convert("RGB")
+            src = ImageOps.fit(src, (r * 2, r * 2), Image.Resampling.LANCZOS)
+            mask = Image.new("L", (r * 2, r * 2), 0)
+            ImageDraw.Draw(mask).ellipse((0, 0, r * 2 - 1, r * 2 - 1), fill=255)
+            im.paste(src, (cx-r, cy-r), mask)
+            d.ellipse((cx-r, cy-r, cx+r, cy+r), outline=border, width=3)
+            return
+        except Exception:
+            pass
+    d.ellipse((cx-r, cy-r, cx+r, cy+r), fill=(31, 29, 25), outline=border, width=3)
+    text(d, (cx, cy), (player.get("name") or "?")[:1].upper(), r, TEXT, True, "mm")
 
-def left(sec,short=False):
-    days,rem=divmod(max(0,int(sec)),86400);hours=rem//3600
-    return f"{days}j {hours}h" if short else f"{days} JOURS {hours} HEURES"
+def panel(d, box, fill=(15, 13, 10, 238), outline=(125, 96, 48, 220), radius=12, width=1):
+    d.rounded_rectangle(box, radius=radius, fill=fill, outline=outline, width=width)
 
-def render_top(group_title,season_number,month_label,players,total_players,top10_xp,remaining_seconds,group_avatar=None):
-    # Geometry is intentionally locked to the approved 1536x864 reference.
-    base=Image.new("RGB",(W,H),(9,9,8))
-    glow=Image.new("RGBA",(W,H),(0,0,0,0));g=ImageDraw.Draw(glow)
-    g.ellipse((-350,-300,650,650),fill=(115,78,28,55));g.ellipse((450,-380,1280,380),fill=(96,71,29,35))
-    glow=glow.filter(ImageFilter.GaussianBlur(135));im=Image.alpha_composite(base.convert("RGBA"),glow).convert("RGB");d=ImageDraw.Draw(im)
-    rr(d,(20,14,1516,850),(16,16,13),(126,101,57),24,2)
+def render_top(group_title, season_number, month_label, players, total_players, top10_xp, remaining_seconds, group_avatar=None):
+    # The approved artwork is the source of truth. Pillow only overlays live Telegram data.
+    try:
+        src = Image.open(TEMPLATE).convert("RGB")
+        im = ImageOps.fit(src, (W, H), Image.Resampling.LANCZOS).convert("RGBA")
+    except Exception:
+        im = Image.new("RGBA", (W, H), (10, 9, 7, 255))
+    d = ImageDraw.Draw(im, "RGBA")
 
-    # HEADER: exact visual scale of reference
-    rr(d,(61,31,164,132),(23,22,18),(112,89,50),14,2)
-    tx(d,112,82,"M",56,(229,205,148),True,"mm")
-    tx(d,183,35,"C L A S S E M E N T   G R O U P E",22,(224,220,210),True)
-    tx(d,183,66,(group_title or "GROUPE").upper()[:22],44,TEXT,True)
-    tx(d,183,111,"Top des membres de ce groupe",21,(201,197,188))
-    tx(d,1480,34,f"SAISON {season_number}",26,(240,205,124),True,"ra")
-    tx(d,1480,70,month_label.upper(),19,(216,212,203),False,"ra")
-    d.line((1304,94,1480,94),fill=(100,82,50),width=1)
-    tx(d,1480,116,"◷  Fin dans "+left(remaining_seconds,True),20,(198,194,186),False,"ra")
+    # Mask only variable-data zones; keep the template's borders, glow, texture and decoration.
+    panel(d, (174, 34, 850, 137), fill=(13, 12, 10, 244), outline=(0,0,0,0), width=0)
+    panel(d, (1160, 31, 1485, 133), fill=(13, 12, 10, 244), outline=(0,0,0,0), width=0)
+    text(d, (184, 38), "C L A S S E M E N T   G R O U P E", 20, MUTED, True)
+    text(d, (184, 67), (group_title or "GROUPE").upper()[:22], 43, TEXT, True)
+    text(d, (184, 113), "Top des membres de ce groupe", 20, MUTED)
+    text(d, (1472, 38), f"SAISON {season_number}", 25, GOLD, True, "ra")
+    text(d, (1472, 72), month_label.upper(), 18, MUTED, False, "ra")
+    text(d, (1472, 112), "◷  Fin dans " + remaining(remaining_seconds, True), 19, MUTED, False, "ra")
 
-    # PODIUM: cards consume the same vertical mass as reference
-    cards=[(54,164,523,355,1,(57,26,33),(185,88,108)),(547,124,989,355,0,(48,43,27),(229,184,72)),(1013,164,1482,355,2,(34,32,46),(150,132,190))]
-    for x1,y1,x2,y2,idx,fill,accent in cards:
-        rr(d,(x1,y1,x2,y2),fill,accent,14,2);cx=(x1+x2)//2
-        d.ellipse((cx-22,y1-20,cx+22,y1+24),fill=accent);tx(d,cx,y1+2,idx+1,22,(18,17,14),True,"mm")
-        if idx<len(players):
-            p=players[idx];av(im,d,cx,y1+72,45,p,accent)
-            tx(d,cx,y1+127,p["name"][:18],24,TEXT,True,"ma")
-            tx(d,cx,y1+156,p["rank"].upper(),21,accent,True,"ma")
-            tx(d,cx,y1+184,f'{p["xp"]:,} XP'.replace(","," "),20,(217,213,204),False,"ma")
-        else: tx(d,cx,y1+116,"—",32,MUTED,True,"mm")
+    # Live podium. The template remains visible around these compact content surfaces.
+    cards = [
+        (55, 165, 522, 355, 1, (185, 88, 108, 255)),
+        (548, 126, 988, 355, 0, (229, 184, 72, 255)),
+        (1014, 165, 1481, 355, 2, (150, 132, 190, 255)),
+    ]
+    for x1, y1, x2, y2, idx, accent in cards:
+        panel(d, (x1+8, y1+8, x2-8, y2-8), fill=(15, 13, 11, 226), outline=accent, radius=13, width=2)
+        cx = (x1+x2)//2
+        text(d, (cx, y1+22), f"#{idx+1}", 21, accent, True, "ma")
+        if idx < len(players):
+            p = players[idx]
+            avatar(im, d, cx, y1+75, 39, p, accent)
+            text(d, (cx, y1+123), p["name"][:18], 23, TEXT, True, "ma")
+            text(d, (cx, y1+151), p["rank"].upper(), 19, accent, True, "ma")
+            text(d, (cx, y1+177), f'{p["xp"]:,} XP'.replace(",", " "), 19, TEXT, True, "ma")
 
-    # RANKS 4-7: thick rows, large text and avatars
-    y=374
-    for idx in range(3,7):
-        rr(d,(54,y,1482,y+58),(21,20,17),(100,80,44),11,1)
-        tx(d,77,y+29,f"#{idx+1}",24,(211,206,194),True,"lm")
-        if idx<len(players):
-            p=players[idx];av(im,d,185,y+29,24,p,(180,175,162))
-            tx(d,244,y+29,p["name"][:22],24,TEXT,True,"lm")
-            tx(d,1450,y+29,f'{p["rank"]}  —  {p["xp"]:,} XP'.replace(","," "),22,(220,216,207),False,"rm")
-        else: tx(d,244,y+29,"—",24,MUTED,False,"lm")
-        y+=64
+    y = 375
+    for idx in range(3, 7):
+        panel(d, (55, y, 1481, y+58), fill=(14, 13, 11, 235), outline=(116, 88, 43, 210), radius=10, width=1)
+        text(d, (78, y+29), f"#{idx+1}", 23, MUTED, True, "lm")
+        if idx < len(players):
+            p = players[idx]
+            avatar(im, d, 184, y+29, 22, p, (181, 172, 153, 255))
+            text(d, (235, y+29), p["name"][:24], 23, TEXT, True, "lm")
+            text(d, (1450, y+29), f'{p["rank"]}   {p["xp"]:,} XP'.replace(",", " "), 21, TEXT, True, "rm")
+        y += 64
 
-    # FOOTER: same three blocks as reference
-    rr(d,(54,644,1482,754),(23,22,18),(113,90,49),17,2)
-    vals=[("MEMBRES DU GROUPE",str(total_players)),("TOP 10",f'{top10_xp:,} XP'.replace(","," ")),("FIN DE SAISON DANS",left(remaining_seconds))]
-    centers=[275,768,1260]
-    for i,(lab,val) in enumerate(vals):
-        if i:d.line((centers[i]-246,669,centers[i]-246,729),fill=(79,69,51),width=1)
-        tx(d,centers[i],669,lab,18,(196,191,182),False,"ma")
-        tx(d,centers[i],711,val,28,(241,223,182),True,"ma")
+    panel(d, (55, 644, 1481, 754), fill=(14, 13, 11, 235), outline=(125, 96, 48, 220), radius=16, width=2)
+    values = [
+        ("MEMBRES DU GROUPE", str(total_players)),
+        ("TOP 10", f'{top10_xp:,} XP'.replace(",", " ")),
+        ("FIN DE SAISON DANS", remaining(remaining_seconds)),
+    ]
+    for cx, (label, value) in zip((275, 768, 1260), values):
+        text(d, (cx, 670), label, 17, MUTED, False, "ma")
+        text(d, (cx, 714), value, 27, GOLD, True, "ma")
 
-    out=BytesIO();im.save(out,"PNG",optimize=True);out.seek(0);return out
+    out = BytesIO()
+    im.convert("RGB").save(out, "PNG", optimize=True)
+    out.seek(0)
+    return out
