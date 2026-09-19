@@ -1,4 +1,5 @@
-import asyncio, os, random, unicodedata\nfrom io import BytesIO
+import asyncio, os, random, unicodedata
+from io import BytesIO
 from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
