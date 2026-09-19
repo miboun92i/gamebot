@@ -22,7 +22,8 @@ TEST_CHAT_ID=int(os.getenv("TEST_CHAT_ID","0"))
 dp=Dispatcher()
 pool=None
 active_games={}
-recent_anagrams={}\nrecent_flags={}
+recent_anagrams={}
+recent_flags={}
 
 WORDS=["abricot","adresse","aiguille","alarme","amande","animal","appareil","argent","armoire","aventure","banane","bateau","biscuit","bouteille","bureau","cabane","cadeau","cahier","camion","cascade","cerise","chance","chapeau","chocolat","cinema","citron","clavier","cloche","coffre","colline","couleur","courage","cuisine","danseur","diamant","dragon","eclair","ecole","ecran","etoile","famille","fenetre","festival","foret","fromage","garage","gateau","guitare","histoire","horloge","jardin","journal","jungle","lampe","livre","magie","maison","marche","melodie","message","mirage","montagne","moteur","musique","mystere","nature","nuage","ocean","orange","parfum","parole","passage","peinture","pirate","planete","plume","puzzle","rapide","rivage","robot","secret","silence","soleil","sourire","tableau","telegram","tempete","tigre","tomate","train","tresor","valise","village","visage","voyage","astronaute","bibliotheque","extraordinaire","magnifique","parapluie","restaurant","telephone","tourbillon"]
 COPY=["incroyable","parapluie","astronaute","magnifique","cacahuete","tourbillon","telegram"]
