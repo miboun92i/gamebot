@@ -538,10 +538,11 @@ async def messages(m:Message):
     if not m.from_user or m.from_user.is_bot or m.chat.type=="private": return
     u=m.from_user; cid=m.chat.id; text=(m.text or m.caption or "").strip()
     await ensure_user(cid,u,m.chat.title)
+    await pool.execute("INSERT INTO group_settings(chat_id) VALUES($1) ON CONFLICT DO NOTHING",cid)
+    cfg=await pool.fetchrow("SELECT * FROM group_settings WHERE chat_id=$1",cid)
     await pool.execute("INSERT INTO message_authors(chat_id,message_id,user_id) VALUES($1,$2,$3) ON CONFLICT DO NOTHING",cid,m.message_id,u.id)
-
     game=active_games.get(cid)
-    if game and text and norm(text)==game["answer"]:
+    if game and game.get("kind")!="flag" and text and norm(text)==game["answer"]:
         elapsed=(datetime.now(timezone.utc)-game["started"]).total_seconds()
         active_games.pop(cid,None)
         await add_xp(cid,u,250,"game_win",m.chat.title)
@@ -549,17 +550,14 @@ async def messages(m:Message):
         await pool.execute("UPDATE users SET wins=wins+1 WHERE chat_id=$1 AND user_id=$2",cid,u.id)
         await pool.execute("UPDATE player_season_stats SET wins=wins+1 WHERE chat_id=$1 AND user_id=$2 AND season_id=$3",cid,u.id,sid)
         await m.reply(f"🏆 {u.full_name} remporte la manche en {elapsed:.1f}s !\n+250 XP")
-
-    if text and not text.startswith("/"):
-        await task_event(cid,u,"message",unique_key=m.message_id,chat_title=m.chat.title)
-    tasks_on=not cfg or cfg["tasks_enabled"] if text and not text.startswith("/") else (await pool.fetchval("SELECT COALESCE(tasks_enabled,TRUE) FROM group_settings WHERE chat_id=$1",cid))
-    if tasks_on and m.photo: await task_event(cid,u,"photo",unique_key=m.message_id,chat_title=m.chat.title)
-    if tasks_on and m.video: await task_event(cid,u,"video",unique_key=m.message_id,chat_title=m.chat.title)
-    if tasks_on and m.voice: await task_event(cid,u,"voice",unique_key=m.message_id,chat_title=m.chat.title)
-    if m.photo or m.video or m.voice or m.document:
-        await task_event(cid,u,"media",unique_key=m.message_id,chat_title=m.chat.title)
-
-    if tasks_on and m.reply_to_message and m.reply_to_message.from_user and m.reply_to_message.from_user.id!=u.id:
+    if text and not text.startswith("/"): await message_activity_xp(m,u,text)
+    if not cfg["tasks_enabled"]: return
+    if text and not text.startswith("/"): await task_event(cid,u,"message",unique_key=m.message_id,chat_title=m.chat.title)
+    if m.photo: await task_event(cid,u,"photo",unique_key=m.message_id,chat_title=m.chat.title)
+    if m.video: await task_event(cid,u,"video",unique_key=m.message_id,chat_title=m.chat.title)
+    if m.voice: await task_event(cid,u,"voice",unique_key=m.message_id,chat_title=m.chat.title)
+    if m.photo or m.video or m.voice or m.document: await task_event(cid,u,"media",unique_key=m.message_id,chat_title=m.chat.title)
+    if m.reply_to_message and m.reply_to_message.from_user and m.reply_to_message.from_user.id!=u.id:
         other=m.reply_to_message.from_user.id
         await task_event(cid,u,"reply",unique_key=m.message_id,chat_title=m.chat.title)
         await task_event(cid,u,"reply_unique",unique_key=other,chat_title=m.chat.title)
