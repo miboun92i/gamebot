@@ -1,5 +1,5 @@
 import asyncio, os, random, unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from zoneinfo import ZoneInfo
 
 import asyncpg
@@ -16,6 +16,9 @@ TOKEN=os.environ["BOT_TOKEN"]
 DB_URL=os.environ["DATABASE_URL"]
 TZ=ZoneInfo(os.getenv("TIMEZONE","Europe/Paris"))
 INTERVAL=int(os.getenv("GAME_INTERVAL_HOURS","2"))
+TEST_MODE=os.getenv("TEST_MODE","false").lower()=="true"
+OWNER_ID=int(os.getenv("OWNER_ID","0"))
+TEST_CHAT_ID=int(os.getenv("TEST_CHAT_ID","0"))
 dp=Dispatcher()
 pool=None
 active_games={}
@@ -47,7 +50,7 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS xp_events(
           id BIGSERIAL PRIMARY KEY,chat_id BIGINT,user_id BIGINT,xp INT,reason TEXT,
           created_at TIMESTAMPTZ DEFAULT now());
-        CREATE TABLE IF NOT EXISTS daily_task_sets(
+        CREATE TABLE IF NOT EXISTS message_activity(\n          chat_id BIGINT,user_id BIGINT,last_text TEXT,last_xp_at TIMESTAMPTZ,\n          spam_window_start TIMESTAMPTZ,spam_count INT DEFAULT 0,xp_blocked_until TIMESTAMPTZ,\n          PRIMARY KEY(chat_id,user_id));\n        CREATE TABLE IF NOT EXISTS daily_task_sets(
           chat_id BIGINT,day DATE,task_key TEXT,PRIMARY KEY(chat_id,day,task_key));
         CREATE TABLE IF NOT EXISTS task_progress(
           chat_id BIGINT,user_id BIGINT,day DATE,task_key TEXT,progress INT DEFAULT 0,claimed BOOLEAN DEFAULT FALSE,
@@ -88,6 +91,56 @@ async def add_xp(chat_id,u,xp,reason,chat_title=None):
     await pool.execute("UPDATE users SET total_xp=total_xp+$1 WHERE chat_id=$2 AND user_id=$3",xp,chat_id,u.id)
     await pool.execute("UPDATE player_season_stats SET xp=xp+$1 WHERE chat_id=$2 AND user_id=$3 AND season_id=$4",xp,chat_id,u.id,sid)
     await pool.execute("INSERT INTO xp_events(chat_id,user_id,xp,reason) VALUES($1,$2,$3,$4)",chat_id,u.id,xp,reason)
+
+async def message_activity_xp(m,u,text):
+    cid=m.chat.id; now=datetime.now(timezone.utc); clean=norm(text)
+    if not clean or len(clean)<3 or text.startswith("/"): return
+    row=await pool.fetchrow("SELECT * FROM message_activity WHERE chat_id=$1 AND user_id=$2",cid,u.id)
+    if row and row["xp_blocked_until"] and row["xp_blocked_until"]>now: return
+    ws=row["spam_window_start"] if row else None; count=row["spam_count"] if row else 0
+    if not ws or (now-ws).total_seconds()>30: ws=now; count=0
+    count+=1
+    repeated=bool(row and row["last_text"] and norm(row["last_text"])==clean)
+    if count>=12 or (repeated and count>=5):
+        until=now+timedelta(minutes=20)
+        await pool.execute("INSERT INTO message_activity(chat_id,user_id,last_text,spam_window_start,spam_count,xp_blocked_until) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(chat_id,user_id) DO UPDATE SET last_text=$3,spam_window_start=$4,spam_count=$5,xp_blocked_until=$6",cid,u.id,text,ws,count,until)
+        await m.reply("⚠️ Spam détecté — gain d’XP suspendu pendant 20 minutes.")
+        return
+    last=row["last_xp_at"] if row else None
+    eligible=not repeated and (not last or (now-last).total_seconds()>=8)
+    await pool.execute("INSERT INTO message_activity(chat_id,user_id,last_text,last_xp_at,spam_window_start,spam_count) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(chat_id,user_id) DO UPDATE SET last_text=$3,last_xp_at=COALESCE($4,message_activity.last_xp_at),spam_window_start=$5,spam_count=$6",cid,u.id,text,now if eligible else None,ws,count)
+    if eligible: await add_xp(cid,u,1,"message_activity",m.chat.title)
+
+def test_allowed(m):
+    return TEST_MODE and m.from_user and m.from_user.id==OWNER_ID and (not TEST_CHAT_ID or m.chat.id==TEST_CHAT_ID)
+
+@dp.message(Command("testgame"))
+async def test_game(m:Message,bot:Bot):
+    if not test_allowed(m): return
+    active_games.pop(m.chat.id,None); await start_game(bot,m.chat.id)
+
+@dp.message(Command("testxp"))
+async def test_xp(m:Message):
+    if not test_allowed(m): return
+    try: amount=int((m.text or "").split(maxsplit=1)[1])
+    except Exception: return await m.answer("Usage : /testxp 30000")
+    if amount<0 or amount>1000000: return await m.answer("Montant test invalide.")
+    await add_xp(m.chat.id,m.from_user,amount,"test_xp",m.chat.title)
+    await m.answer(f"🧪 +{amount} XP test ajoutés.")
+
+@dp.message(Command("testspam"))
+async def test_spam(m:Message):
+    if not test_allowed(m): return
+    until=datetime.now(timezone.utc)+timedelta(minutes=20)
+    await pool.execute("INSERT INTO message_activity(chat_id,user_id,xp_blocked_until) VALUES($1,$2,$3) ON CONFLICT(chat_id,user_id) DO UPDATE SET xp_blocked_until=$3",m.chat.id,m.from_user.id,until)
+    await m.answer("🧪 Blocage XP anti-spam activé pour 20 minutes.")
+
+@dp.message(Command("testreset"))
+async def test_reset(m:Message):
+    if not test_allowed(m): return
+    sid=await current_season_id()
+    await pool.execute("UPDATE player_season_stats SET xp=0,wins=0,tasks_completed=0,best_streak=0 WHERE chat_id=$1 AND season_id=$2",m.chat.id,sid)
+    await m.answer("🧪 Saison du groupe remise à zéro pour le test.")
 
 async def daily_tasks(chat_id):
     day=datetime.now(TZ).date()
