@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import asyncpg
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message, MessageReactionUpdated, BufferedInputFile
+from aiogram.types import Message, MessageReactionUpdated, BufferedInputFile, BotCommand
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from ranks import RANKS, rank_for_xp, next_rank
@@ -364,6 +364,31 @@ async def group_top_cmd(m:Message):
 @dp.message(Command("groupranks"))
 async def group_ranks_cmd(m:Message):
     await m.answer("🌐 RANGS DE GROUPE\n\nLe rang d’un groupe correspond à sa position dans /grouptop pour la saison en cours.\nLe score utilisé est l’XP cumulée de ses 10 meilleurs joueurs.")
+
+@dp.message(Command("season"))
+async def season_cmd(m:Message):
+    if m.chat.type=="private": return await m.answer("Utilise /season dans un groupe.")
+    sid=await ensure_user(m.chat.id,m.from_user,m.chat.title)
+    season=await pool.fetchrow("SELECT label,ends_at FROM seasons WHERE id=$1",sid)
+    me=await pool.fetchrow("SELECT xp,wins,tasks_completed FROM player_season_stats WHERE chat_id=$1 AND user_id=$2 AND season_id=$3",m.chat.id,m.from_user.id,sid)
+    pos=await pool.fetchval("SELECT 1+count(*) FROM player_season_stats WHERE chat_id=$1 AND season_id=$2 AND xp>$3",m.chat.id,sid,me["xp"])
+    top=await pool.fetch("""SELECT u.name,s.xp FROM player_season_stats s JOIN users u ON u.chat_id=s.chat_id AND u.user_id=s.user_id WHERE s.chat_id=$1 AND s.season_id=$2 ORDER BY s.xp DESC,s.user_id LIMIT 3""",m.chat.id,sid)
+    end=season["ends_at"].astimezone(TZ); delta=end-datetime.now(TZ); hours=max(0,int(delta.total_seconds()//3600)); days,hours=divmod(hours,24)
+    podium="\n".join(f"{['🥇','🥈','🥉'][i]} {r['name']} — {r['xp']} XP" for i,r in enumerate(top)) or "Pas encore de classement"
+    await m.answer(f"🏆 SAISON — {season['label']}\n\n⏳ {days}j {hours}h restantes\n🏅 {rank_for_xp(me['xp'])} · {me['xp']} XP · #{pos}\n🎮 {me['wins']} victoires · 📋 {me['tasks_completed']} tâches\n\n{podium}\n\n🔄 Reset : {end.strftime('%d/%m à %H:%M')}")
+
+@dp.message(Command("help"))
+async def help_cmd(m:Message):
+    await m.answer("🎮 COMMANDES\n\n/rank — ton rang\n/ranks — tous les rangs\n/top — Top 7 du groupe\n/stats — tes statistiques\n/season — saison actuelle\n/tasks — tâches du jour\n/badges — tes badges\n/grouprank — rang du groupe\n/groupranks — système des groupes\n/grouptop — Top groupes\n/settings — réglages admins\n/help — cette aide")
+
+@dp.message(Command("settings"))
+async def settings_cmd(m:Message,bot:Bot):
+    if m.chat.type=="private": return await m.answer("Utilise /settings dans un groupe.")
+    member=await bot.get_chat_member(m.chat.id,m.from_user.id)
+    if member.status not in ("administrator","creator"): return await m.answer("🔒 Réservé aux administrateurs.")
+    await pool.execute("INSERT INTO group_settings(chat_id) VALUES($1) ON CONFLICT DO NOTHING",m.chat.id)
+    row=await pool.fetchrow("SELECT * FROM group_settings WHERE chat_id=$1",m.chat.id)
+    await m.answer(f"⚙️ RÉGLAGES DU GROUPE\n\n🎮 Jeux : {'ON' if row['games_enabled'] else 'OFF'}\n📋 Tâches : {'ON' if row['tasks_enabled'] else 'OFF'}\n🏅 Annonces de rang : {'ON' if row['rank_announcements'] else 'OFF'}\n🏆 Fin de saison : {'ON' if row['season_announcements'] else 'OFF'}\n\nLes boutons interactifs arrivent dans l’étape suivante.")
 
 @dp.message(Command("tasks"))
 @dp.message(Command("missions"))
