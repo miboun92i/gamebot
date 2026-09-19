@@ -332,6 +332,39 @@ async def top_cmd(m:Message):
     image=render_top(m.chat.title,season["label"],players,total,top10_xp,days_left)
     await m.answer_photo(BufferedInputFile(image.getvalue(),filename="top.png"))
 
+async def group_scores():
+    sid=await current_season_id()
+    return await pool.fetch("""WITH ranked AS (
+      SELECT s.chat_id,s.xp,ROW_NUMBER() OVER(PARTITION BY s.chat_id ORDER BY s.xp DESC,s.user_id) rn
+      FROM player_season_stats s WHERE s.season_id=$1)
+      SELECT g.chat_id,COALESCE(g.title,'Groupe') title,COALESCE(SUM(r.xp) FILTER(WHERE r.rn<=10),0)::BIGINT score
+      FROM groups g LEFT JOIN ranked r ON r.chat_id=g.chat_id
+      GROUP BY g.chat_id,g.title ORDER BY score DESC,g.chat_id""",sid)
+
+@dp.message(Command("grouprank"))
+async def group_rank_cmd(m:Message):
+    if m.chat.type=="private": return await m.answer("Utilise /grouprank dans un groupe.")
+    await ensure_user(m.chat.id,m.from_user,m.chat.title)
+    rows=await group_scores()
+    for i,r in enumerate(rows,1):
+        if r["chat_id"]==m.chat.id:
+            return await m.answer(f"🌐 CLASSEMENT GROUPE\n\n🏆 {r['title']}\n📍 #{i} sur {len(rows)} groupes\n⭐ {r['score']:,} XP · Top 10".replace(","," "))
+
+@dp.message(Command("grouptop"))
+async def group_top_cmd(m:Message):
+    rows=await group_scores()
+    if not rows: return await m.answer("🌐 Aucun groupe classé pour le moment.")
+    medals=["🥇","🥈","🥉"]
+    lines=[]
+    for i,r in enumerate(rows[:10],1):
+        icon=medals[i-1] if i<=3 else f"{i}."
+        lines.append(f"{icon} {r['title']} — {r['score']:,} XP".replace(","," "))
+    await m.answer("🌐 TOP GROUPES — TOP 10\n\n"+"\n".join(lines)+"\n\nScore = XP cumulée des 10 meilleurs joueurs du groupe.")
+
+@dp.message(Command("groupranks"))
+async def group_ranks_cmd(m:Message):
+    await m.answer("🌐 RANGS DE GROUPE\n\nLe rang d’un groupe correspond à sa position dans /grouptop pour la saison en cours.\nLe score utilisé est l’XP cumulée de ses 10 meilleurs joueurs.")
+
 @dp.message(Command("tasks"))
 @dp.message(Command("missions"))
 async def tasks_cmd(m:Message):
