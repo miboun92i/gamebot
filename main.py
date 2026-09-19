@@ -52,7 +52,31 @@ async def init_db():
         CREATE TABLE IF NOT EXISTS xp_events(
           id BIGSERIAL PRIMARY KEY,chat_id BIGINT,user_id BIGINT,xp INT,reason TEXT,
           created_at TIMESTAMPTZ DEFAULT now());
-        CREATE TABLE IF NOT EXISTS message_activity(\n          chat_id BIGINT,user_id BIGINT,last_text TEXT,last_xp_at TIMESTAMPTZ,\n          spam_window_start TIMESTAMPTZ,spam_count INT DEFAULT 0,xp_blocked_until TIMESTAMPTZ,\n          PRIMARY KEY(chat_id,user_id));\n        CREATE TABLE IF NOT EXISTS daily_task_sets(
+        CREATE TABLE IF NOT EXISTS message_activity(
+          chat_id BIGINT,user_id BIGINT,last_text TEXT,last_xp_at TIMESTAMPTZ,
+          spam_window_start TIMESTAMPTZ,spam_count INT DEFAULT 0,xp_blocked_until TIMESTAMPTZ,
+          PRIMARY KEY(chat_id,user_id));
+        CREATE TABLE IF NOT EXISTS badges(
+          id BIGSERIAL PRIMARY KEY,code TEXT UNIQUE NOT NULL,label TEXT NOT NULL,category TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS player_badges(
+          chat_id BIGINT,user_id BIGINT,badge_id BIGINT REFERENCES badges(id),season_id BIGINT REFERENCES seasons(id),
+          earned_at TIMESTAMPTZ DEFAULT now(),PRIMARY KEY(chat_id,user_id,badge_id));
+        CREATE TABLE IF NOT EXISTS season_results(
+          chat_id BIGINT,season_id BIGINT REFERENCES seasons(id),user_id BIGINT,position INT,xp BIGINT,rank_name TEXT,
+          PRIMARY KEY(chat_id,season_id,user_id));
+        CREATE TABLE IF NOT EXISTS season_closures(
+          chat_id BIGINT,season_id BIGINT REFERENCES seasons(id),closed_at TIMESTAMPTZ DEFAULT now(),
+          PRIMARY KEY(chat_id,season_id));
+        CREATE TABLE IF NOT EXISTS group_settings(
+          chat_id BIGINT PRIMARY KEY,games_enabled BOOLEAN DEFAULT TRUE,tasks_enabled BOOLEAN DEFAULT TRUE,
+          rank_announcements BOOLEAN DEFAULT TRUE,season_announcements BOOLEAN DEFAULT TRUE,game_interval_hours INT DEFAULT 2,
+          game_anagram BOOLEAN DEFAULT TRUE,game_math BOOLEAN DEFAULT TRUE,game_copy BOOLEAN DEFAULT TRUE,game_flag BOOLEAN DEFAULT TRUE);
+        INSERT INTO badges(code,label,category) VALUES
+          ('wins_100','100 victoires','exploit'),('wins_500','500 victoires','exploit'),
+          ('tasks_100','100 tâches','activité'),('tasks_500','500 tâches','activité'),
+          ('veteran_3','Vétéran','collection'),('ancient_6','Ancien','collection'),('legend_12','Légende','collection')
+          ON CONFLICT(code) DO NOTHING;
+        CREATE TABLE IF NOT EXISTS daily_task_sets(
           chat_id BIGINT,day DATE,task_key TEXT,PRIMARY KEY(chat_id,day,task_key));
         CREATE TABLE IF NOT EXISTS task_progress(
           chat_id BIGINT,user_id BIGINT,day DATE,task_key TEXT,progress INT DEFAULT 0,claimed BOOLEAN DEFAULT FALSE,
