@@ -5,6 +5,7 @@ import asyncpg
 from aiogram import Bot, Dispatcher, F
 from aiogram.filters import Command
 from aiogram.types import Message
+from ranks import RANKS, rank_for_xp, next_rank
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 TOKEN=os.environ["BOT_TOKEN"]
@@ -17,7 +18,7 @@ active_games={}
 
 WORDS=["silence","telegram","mystere","cascade","planete","orange","pirate","musique","voyage","rapide","secret","chance","dragon","cinema","jungle","mirage","puzzle","soleil"]
 COPY=["incroyable","parapluie","astronaute","magnifique","cacahuete","tourbillon","telegram"]
-MISSIONS={"detailed":(7,30),"replies":(3,20),"reactions_received":(6,35)}
+MISSIONS={"detailed":(7,25),"replies":(3,25),"reactions_received":(6,50)}
 
 def norm(s):
     s=unicodedata.normalize("NFD",s.lower().strip())
@@ -99,7 +100,7 @@ def new_game():
 async def start_game(bot,chat_id):
     if chat_id in active_games:return
     kind,text,ans=new_game()
-    msg=await bot.send_message(chat_id,text+"\n\n🏆 Premier à répondre correctement : +50 XP")
+    msg=await bot.send_message(chat_id,text+"\n\n🏆 Premier à répondre correctement : +250 XP")
     active_games[chat_id]={"answer":norm(ans),"started":datetime.now(timezone.utc),"message_id":msg.message_id}
 
 async def scheduled_games(bot):
@@ -122,6 +123,31 @@ async def profile(m:Message):
     rank=await pool.fetchval("SELECT 1+count(*) FROM users WHERE chat_id=$1 AND total_xp>$2",m.chat.id,r["total_xp"])
     level=1+r["total_xp"]//500
     await m.answer(f"👤 {m.from_user.full_name}\n⭐ {r['total_xp']} XP · Niveau {level}\n🏆 {r['wins']} jeux gagnés\n📊 #{rank} du classement général")
+
+@dp.message(Command("rank"))
+async def rank_cmd(m:Message):
+    sid=await ensure_user(m.chat.id,m.from_user,m.chat.title)
+    xp=await pool.fetchval("SELECT xp FROM player_season_stats WHERE chat_id=$1 AND user_id=$2 AND season_id=$3",m.chat.id,m.from_user.id,sid) or 0
+    rank=rank_for_xp(xp)
+    nxt,threshold=next_rank(xp)
+    extra=f"\n➡️ Prochain : {nxt} à {threshold} XP" if nxt else "\n✨ Rang maximum atteint"
+    await m.answer(f"🏅 {rank}\n⭐ {xp} XP cette saison"+extra)
+
+@dp.message(Command("ranks"))
+async def ranks_cmd(m:Message):
+    await m.answer("🏅 RANGS DE SAISON\n\n"+"\n".join(f"{name} — {xp:,} XP".replace(","," ") for name,xp in RANKS))
+
+@dp.message(Command("top"))
+async def top_cmd(m:Message):
+    sid=await current_season_id()
+    rows=await pool.fetch("""SELECT u.name,s.xp FROM player_season_stats s
+      JOIN users u ON u.chat_id=s.chat_id AND u.user_id=s.user_id
+      WHERE s.chat_id=$1 AND s.season_id=$2 ORDER BY s.xp DESC,u.user_id ASC LIMIT 7""",m.chat.id,sid)
+    if not rows:
+        return await m.answer("🏆 Pas encore de classement pour cette saison.")
+    medals=["🥇","🥈","🥉"]
+    lines=[f"{medals[i] if i<3 else str(i+1)+'.'} {r['name']} — {r['xp']} XP · {rank_for_xp(r['xp'])}" for i,r in enumerate(rows)]
+    await m.answer("🏆 TOP 7 DU GROUPE — SAISON EN COURS\n\n"+"\n".join(lines))
 
 @dp.message(Command("missions"))
 async def missions(m:Message):
@@ -158,13 +184,13 @@ async def reaction_handler(m:Message):
 async def messages(m:Message):
     if not m.from_user or m.from_user.is_bot or m.chat.type=="private" or not m.text:return
     u=m.from_user; cid=m.chat.id; text=m.text.strip()
-    await ensure_user(cid,u)
+    await ensure_user(cid,u,m.chat.title)
 
     game=active_games.get(cid)
     if game and norm(text)==game["answer"]:
         elapsed=(datetime.now(timezone.utc)-game["started"]).total_seconds()
         active_games.pop(cid,None)
-        await add_xp(cid,u,50,"game_win")
+        await add_xp(cid,u,250,"game_win",m.chat.title)
         await pool.execute("UPDATE users SET wins=wins+1 WHERE chat_id=$1 AND user_id=$2",cid,u.id)
         return await m.reply(f"🏆 {u.full_name} remporte la manche en {elapsed:.1f}s !\n+50 XP")
 
