@@ -5,11 +5,12 @@ from zoneinfo import ZoneInfo
 import asyncpg
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message, MessageReactionUpdated
+from aiogram.types import Message, MessageReactionUpdated, BufferedInputFile
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from ranks import RANKS, rank_for_xp, next_rank
 from tasks import TASK_POOL, DAILY_TASK_COUNT, DAILY_BONUS
+from leaderboard_image import render_top
 
 TOKEN=os.environ["BOT_TOKEN"]
 DB_URL=os.environ["DATABASE_URL"]
@@ -173,14 +174,21 @@ async def ranks_cmd(m:Message):
 
 @dp.message(Command("top"))
 async def top_cmd(m:Message):
+    if m.chat.type=="private": return await m.answer("Utilise /top dans un groupe.")
     sid=await current_season_id()
     rows=await pool.fetch("""SELECT u.name,s.xp FROM player_season_stats s
       JOIN users u ON u.chat_id=s.chat_id AND u.user_id=s.user_id
-      WHERE s.chat_id=$1 AND s.season_id=$2 ORDER BY s.xp DESC,u.user_id ASC LIMIT 7""",m.chat.id,sid)
+      WHERE s.chat_id=$1 AND s.season_id=$2 ORDER BY s.xp DESC,u.user_id ASC LIMIT 10""",m.chat.id,sid)
     if not rows: return await m.answer("🏆 Pas encore de classement pour cette saison.")
-    medals=["🥇","🥈","🥉"]
-    lines=[f"{medals[i] if i<3 else str(i+1)+'.'} {r['name']} — {r['xp']} XP · {rank_for_xp(r['xp'])}" for i,r in enumerate(rows)]
-    await m.answer("🏆 TOP 7 DU GROUPE — SAISON EN COURS\n\n"+"\n".join(lines))
+    season=await pool.fetchrow("SELECT label,ends_at FROM seasons WHERE id=$1",sid)
+    total=await pool.fetchval("SELECT count(*) FROM player_season_stats WHERE chat_id=$1 AND season_id=$2",m.chat.id,sid)
+    players=[{"name":r["name"],"xp":r["xp"],"rank":rank_for_xp(r["xp"])} for r in rows[:7]]
+    top10_xp=sum(r["xp"] for r in rows[:10])
+    now=datetime.now(TZ)
+    end_at=season["ends_at"].astimezone(TZ)
+    days_left=max(0,(end_at.date()-now.date()).days)
+    image=render_top(m.chat.title,season["label"],players,total,top10_xp,days_left)
+    await m.answer_photo(BufferedInputFile(image.getvalue(),filename="top.png"))
 
 @dp.message(Command("tasks"))
 @dp.message(Command("missions"))
