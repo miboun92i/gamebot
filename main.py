@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 import asyncpg
 from aiogram import Bot, Dispatcher
 from aiogram.filters import Command
-from aiogram.types import Message, MessageReactionUpdated, BufferedInputFile, BotCommand
+from aiogram.types import Message, MessageReactionUpdated, BufferedInputFile, BotCommand, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from ranks import RANKS, rank_for_xp, next_rank
@@ -25,6 +25,7 @@ active_games={}
 
 WORDS=["silence","telegram","mystere","cascade","planete","orange","pirate","musique","voyage","rapide","secret","chance","dragon","cinema","jungle","mirage","puzzle","soleil"]
 COPY=["incroyable","parapluie","astronaute","magnifique","cacahuete","tourbillon","telegram"]
+FLAGS={"🇫🇷":"France","🇵🇹":"Portugal","🇪🇸":"Espagne","🇮🇹":"Italie","🇩🇪":"Allemagne","🇧🇪":"Belgique","🇦🇱":"Albanie","🇲🇦":"Maroc","🇨🇦":"Canada","🇯🇵":"Japon","🇧🇷":"Brésil","🇬🇷":"Grèce"}
 
 def norm(s):
     s=unicodedata.normalize("NFD",str(s).lower().strip())
@@ -381,6 +382,16 @@ async def season_cmd(m:Message):
 async def help_cmd(m:Message):
     await m.answer("🎮 COMMANDES\n\n/rank — ton rang\n/ranks — tous les rangs\n/top — Top 7 du groupe\n/stats — tes statistiques\n/season — saison actuelle\n/tasks — tâches du jour\n/badges — tes badges\n/grouprank — rang du groupe\n/groupranks — système des groupes\n/grouptop — Top groupes\n/settings — réglages admins\n/help — cette aide")
 
+def settings_keyboard(row):
+    def b(label,key,val): return InlineKeyboardButton(text=f"{label} {'✅' if val else '❌'}",callback_data="set:"+key)
+    return InlineKeyboardMarkup(inline_keyboard=[
+      [b("Jeux","games_enabled",row["games_enabled"]),b("Tâches","tasks_enabled",row["tasks_enabled"])],
+      [b("Anagramme","game_anagram",row["game_anagram"]),b("Calcul","game_math",row["game_math"])],
+      [b("Recopie","game_copy",row["game_copy"]),b("Drapeau","game_flag",row["game_flag"])],
+      [b("Annonces rang","rank_announcements",row["rank_announcements"])],
+      [b("Fin saison","season_announcements",row["season_announcements"])]
+    ])
+
 @dp.message(Command("settings"))
 async def settings_cmd(m:Message,bot:Bot):
     if m.chat.type=="private": return await m.answer("Utilise /settings dans un groupe.")
@@ -388,7 +399,19 @@ async def settings_cmd(m:Message,bot:Bot):
     if member.status not in ("administrator","creator"): return await m.answer("🔒 Réservé aux administrateurs.")
     await pool.execute("INSERT INTO group_settings(chat_id) VALUES($1) ON CONFLICT DO NOTHING",m.chat.id)
     row=await pool.fetchrow("SELECT * FROM group_settings WHERE chat_id=$1",m.chat.id)
-    await m.answer(f"⚙️ RÉGLAGES DU GROUPE\n\n🎮 Jeux : {'ON' if row['games_enabled'] else 'OFF'}\n📋 Tâches : {'ON' if row['tasks_enabled'] else 'OFF'}\n🏅 Annonces de rang : {'ON' if row['rank_announcements'] else 'OFF'}\n🏆 Fin de saison : {'ON' if row['season_announcements'] else 'OFF'}\n\nLes boutons interactifs arrivent dans l’étape suivante.")
+    await m.answer("⚙️ RÉGLAGES DU GROUPE\n\nAppuie sur un bouton pour activer/désactiver.",reply_markup=settings_keyboard(row))
+
+@dp.callback_query(lambda q: q.data and q.data.startswith("set:"))
+async def settings_callback(q:CallbackQuery,bot:Bot):
+    if not q.message: return
+    member=await bot.get_chat_member(q.message.chat.id,q.from_user.id)
+    if member.status not in ("administrator","creator"): return await q.answer("Admins uniquement.",show_alert=True)
+    key=q.data.split(":",1)[1]
+    allowed={"games_enabled","tasks_enabled","rank_announcements","season_announcements","game_anagram","game_math","game_copy","game_flag"}
+    if key not in allowed: return
+    await pool.execute(f"UPDATE group_settings SET {key}=NOT {key} WHERE chat_id=$1",q.message.chat.id)
+    row=await pool.fetchrow("SELECT * FROM group_settings WHERE chat_id=$1",q.message.chat.id)
+    await q.message.edit_reply_markup(reply_markup=settings_keyboard(row)); await q.answer("Réglage enregistré")
 
 @dp.message(Command("tasks"))
 @dp.message(Command("missions"))
