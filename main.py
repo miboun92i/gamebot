@@ -147,6 +147,44 @@ async def start_game(bot,chat_id):
     msg=await bot.send_message(chat_id,text+"\n\n🏆 Premier à répondre correctement : +250 XP")
     active_games[chat_id]={"answer":norm(ans),"started":datetime.now(timezone.utc),"message_id":msg.message_id}
 
+async def close_finished_seasons(bot):
+    now=datetime.now(TZ)
+    seasons=await pool.fetch("SELECT id,label FROM seasons WHERE ends_at<=$1",now)
+    groups=await pool.fetch("SELECT chat_id,title FROM groups")
+    for season in seasons:
+        for group in groups:
+            cid=group["chat_id"]; sid=season["id"]
+            already=await pool.fetchval("SELECT 1 FROM season_closures WHERE chat_id=$1 AND season_id=$2",cid,sid)
+            if already: continue
+            rows=await pool.fetch("""SELECT s.user_id,s.xp,u.name FROM player_season_stats s
+              JOIN users u ON u.chat_id=s.chat_id AND u.user_id=s.user_id
+              WHERE s.chat_id=$1 AND s.season_id=$2 ORDER BY s.xp DESC,s.user_id ASC""",cid,sid)
+            if not rows:
+                await pool.execute("INSERT INTO season_closures(chat_id,season_id) VALUES($1,$2) ON CONFLICT DO NOTHING",cid,sid)
+                continue
+            async with pool.acquire() as con:
+                async with con.transaction():
+                    for pos,r in enumerate(rows,1):
+                        await con.execute("""INSERT INTO season_results(chat_id,season_id,user_id,position,xp,rank_name)
+                          VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING""",
+                          cid,sid,r["user_id"],pos,r["xp"],rank_for_xp(r["xp"]))
+                    podium=[("champion","Champion"),("vice","Vice-champion"),("top3","Top 3")]
+                    for pos,(prefix,label) in enumerate(podium,1):
+                        if len(rows)<pos: break
+                        code=f"{prefix}_s{sid}_g{abs(cid)}"
+                        bid=await con.fetchval("""INSERT INTO badges(code,label,category) VALUES($1,$2,'competition')
+                          ON CONFLICT(code) DO UPDATE SET label=EXCLUDED.label RETURNING id""",
+                          code,f"{label} · {season['label']}")
+                        await con.execute("""INSERT INTO player_badges(chat_id,user_id,badge_id,season_id)
+                          VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING""",cid,rows[pos-1]["user_id"],bid,sid)
+                    await con.execute("INSERT INTO season_closures(chat_id,season_id) VALUES($1,$2) ON CONFLICT DO NOTHING",cid,sid)
+            names=[r["name"] for r in rows[:3]]
+            medals=["🥇","🥈","🥉"]
+            text="🏆 SAISON TERMINÉE — "+season["label"]+"\n\n"+ "\n".join(f"{medals[i]} {name}" for i,name in enumerate(names))
+            text+="\n\n✨ Nouvelle saison : XP et rang repartent de zéro."
+            try: await bot.send_message(cid,text)
+            except Exception: pass
+
 async def scheduled_games(bot):
     rows=await pool.fetch("SELECT chat_id FROM groups")
     for r in rows:
@@ -319,6 +357,8 @@ async def main():
     bot=Bot(TOKEN)
     scheduler=AsyncIOScheduler(timezone=TZ)
     scheduler.add_job(scheduled_games,"interval",hours=INTERVAL,args=[bot],id="games")
+    scheduler.add_job(close_finished_seasons,"cron",hour=0,minute=2,args=[bot],id="season_close")
+    await close_finished_seasons(bot)
     scheduler.start()
     try: await dp.start_polling(bot)
     finally:
