@@ -144,6 +144,16 @@ async def test_reset(m:Message):
     await pool.execute("UPDATE player_season_stats SET xp=0,wins=0,tasks_completed=0,best_streak=0 WHERE chat_id=$1 AND season_id=$2",m.chat.id,sid)
     await m.answer("🧪 Saison du groupe remise à zéro pour le test.")
 
+@dp.message(Command("testseason"))
+async def test_season(m:Message,bot:Bot):
+    if not test_allowed(m): return
+    sid=await current_season_id()
+    rows=await pool.fetch("""SELECT s.user_id,s.xp,u.name FROM player_season_stats s JOIN users u ON u.chat_id=s.chat_id AND u.user_id=s.user_id WHERE s.chat_id=$1 AND s.season_id=$2 ORDER BY s.xp DESC,s.user_id""",m.chat.id,sid)
+    if not rows: return await m.answer("🧪 Aucun joueur à simuler.")
+    medals=["🥇","🥈","🥉"]
+    preview="\n".join(f"{medals[i]} {r['name']} — {r['xp']} XP" for i,r in enumerate(rows[:3]))
+    await m.answer("🧪 SIMULATION FIN DE SAISON\n\n"+preview+"\n\nAucune donnée réelle n’a été fermée ou supprimée.")
+
 async def daily_tasks(chat_id):
     day=datetime.now(TZ).date()
     rows=await pool.fetch("SELECT task_key FROM daily_task_sets WHERE chat_id=$1 AND day=$2",chat_id,day)
@@ -518,13 +528,14 @@ async def messages(m:Message):
 
     if text and not text.startswith("/"):
         await task_event(cid,u,"message",unique_key=m.message_id,chat_title=m.chat.title)
-    if m.photo: await task_event(cid,u,"photo",unique_key=m.message_id,chat_title=m.chat.title)
-    if m.video: await task_event(cid,u,"video",unique_key=m.message_id,chat_title=m.chat.title)
-    if m.voice: await task_event(cid,u,"voice",unique_key=m.message_id,chat_title=m.chat.title)
+    tasks_on=not cfg or cfg["tasks_enabled"] if text and not text.startswith("/") else (await pool.fetchval("SELECT COALESCE(tasks_enabled,TRUE) FROM group_settings WHERE chat_id=$1",cid))
+    if tasks_on and m.photo: await task_event(cid,u,"photo",unique_key=m.message_id,chat_title=m.chat.title)
+    if tasks_on and m.video: await task_event(cid,u,"video",unique_key=m.message_id,chat_title=m.chat.title)
+    if tasks_on and m.voice: await task_event(cid,u,"voice",unique_key=m.message_id,chat_title=m.chat.title)
     if m.photo or m.video or m.voice or m.document:
         await task_event(cid,u,"media",unique_key=m.message_id,chat_title=m.chat.title)
 
-    if m.reply_to_message and m.reply_to_message.from_user and m.reply_to_message.from_user.id!=u.id:
+    if tasks_on and m.reply_to_message and m.reply_to_message.from_user and m.reply_to_message.from_user.id!=u.id:
         other=m.reply_to_message.from_user.id
         await task_event(cid,u,"reply",unique_key=m.message_id,chat_title=m.chat.title)
         await task_event(cid,u,"reply_unique",unique_key=other,chat_title=m.chat.title)
