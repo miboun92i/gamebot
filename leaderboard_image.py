@@ -56,15 +56,12 @@ def render_top(group_title, season_number, month_label, players, total_players, 
         im = Image.new("RGBA", (W, H), (10, 9, 7, 255))
     d = ImageDraw.Draw(im, "RGBA")
 
-    # Mask only variable-data zones; keep the template's borders, glow, texture and decoration.
-    panel(d, (174, 34, 850, 137), fill=(13, 12, 10, 244), outline=(0,0,0,0), width=0)
-    panel(d, (1160, 31, 1485, 133), fill=(13, 12, 10, 244), outline=(0,0,0,0), width=0)
-    text(d, (184, 38), "C L A S S E M E N T   G R O U P E", 20, MUTED, True)
-    text(d, (184, 67), (group_title or "GROUPE").upper()[:22], 43, TEXT, True)
-    text(d, (184, 113), "Top des membres de ce groupe", 20, MUTED)
-    text(d, (1472, 38), f"SAISON {season_number}", 25, GOLD, True, "ra")
-    text(d, (1472, 72), month_label.upper(), 18, MUTED, False, "ra")
-    text(d, (1472, 112), "◷  Fin dans " + remaining(remaining_seconds, True), 19, MUTED, False, "ra")
+    # Keep the approved artwork intact: no large opaque masks over the template.
+    # Only paint compact live labels where the reference expects dynamic data.
+    text(d, (184, 67), (group_title or "GROUPE").upper()[:22], 34, TEXT, True)
+    text(d, (1472, 38), f"SAISON {season_number}", 20, GOLD, True, "ra")
+    text(d, (1472, 72), month_label.upper(), 16, MUTED, False, "ra")
+    text(d, (1472, 112), "◷  Fin dans " + remaining(remaining_seconds, True), 16, MUTED, False, "ra")
 
     # Live podium. The template remains visible around these compact content surfaces.
     cards = [
@@ -73,7 +70,6 @@ def render_top(group_title, season_number, month_label, players, total_players, 
         (1014, 165, 1481, 355, 2, (150, 132, 190, 255)),
     ]
     for x1, y1, x2, y2, idx, accent in cards:
-        panel(d, (x1+8, y1+8, x2-8, y2-8), fill=(15, 13, 11, 226), outline=accent, radius=13, width=2)
         cx = (x1+x2)//2
         text(d, (cx, y1+22), f"#{idx+1}", 21, accent, True, "ma")
         if idx < len(players):
@@ -85,7 +81,6 @@ def render_top(group_title, season_number, month_label, players, total_players, 
 
     y = 375
     for idx in range(3, 7):
-        panel(d, (55, y, 1481, y+58), fill=(14, 13, 11, 235), outline=(116, 88, 43, 210), radius=10, width=1)
         text(d, (78, y+29), f"#{idx+1}", 23, MUTED, True, "lm")
         if idx < len(players):
             p = players[idx]
@@ -94,7 +89,6 @@ def render_top(group_title, season_number, month_label, players, total_players, 
             text(d, (1450, y+29), f'{p["rank"]}   {p["xp"]:,} XP'.replace(",", " "), 21, TEXT, True, "rm")
         y += 64
 
-    panel(d, (55, 644, 1481, 754), fill=(14, 13, 11, 235), outline=(125, 96, 48, 220), radius=16, width=2)
     values = [
         ("MEMBRES DU GROUPE", str(total_players)),
         ("TOP 10", f'{top10_xp:,} XP'.replace(",", " ")),
